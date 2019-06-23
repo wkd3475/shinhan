@@ -1,6 +1,6 @@
 import torch
 import pickle
-import math
+import random
 
 class DataClass:
     def __init__(self):
@@ -84,31 +84,46 @@ class DataClass:
     def get_classCredit(self):
         return self.classCredit
 
-def two_layer_net(inputs, target, params):
+def one_layer_net(inputs, target, active, params):
+    #inputs : (1, n)
+    #W1 : (N, 1)
+    #b1 : (1, 1)
+    Y = torch.mm(inputs, params['W1'][active]) + params['b1']
+    #Y : (1, 1)
+    if target is None:
+        return Y
+
+    loss = (Y - target)**2 / 2
+
+    grads = {}
+    grads['W1'] = (Y - target)*inputs
+    grads['b1'] = Y - target
+
+    return loss, grads
+
+"""
+def two_layer_net(inputs, target, active, params):
     #inputs : (1:N)
     #W1 : (N:D) b1 : (D)
     #W2 : (D:1) b2 : (1)
-    Y1 = torch.mm(inputs, params['W1']) + params['b1']#(1,D)
+    #active : n
+
+    Y1 = torch.mm(inputs, params['W1'][active]) + params['b1']#(1,D)
     h1 = torch.clamp(Y1, min=0)#(1,D)
     Y2 = torch.mm(h1, params['W2']) + params['b2']#(1:1)
-    out = torch.clamp(Y2, min=0)
 
     #for predict
     if target is None:
-        return out
+        return Y2
 
-    loss = out - target
+    loss = (Y2 - target)**2
 
     grads = {}
 
-    dout = 1
-
     #(1:D)
-    mask = (out <= 0)
-    dout[mask] = 0
 
-    grads['W2'] = torch.mm(torch.t(h1), dout)#(D:1)
-    grads['b2'] = torch.sum(dout, dim=0)
+    grads['W2'] = (Y2-target)*inputs
+    #grads['b2'] = ??
     dout = torch.mm(dout, torch.t(params['W2']))#(1:D)
 
     mask = (h1 <= 0)
@@ -119,35 +134,36 @@ def two_layer_net(inputs, target, params):
     dout = torch.mm(dout, torch.t(params['W1']))#(1:N)
 
     return loss, grads
+"""
 
-
-def trainer(input_seq, target_seq, dimention, learning_rate, epoch):
-    option_size = len(input_seq[0])
+def trainer(input_seq, target_seq, active_seq, dimention, learning_rate, decay, epoch):
+    option_size = 7
     params = {}
-    params['W1'] = torch.randn(option_size, dimention) / (dimention**0.5)
-    params['b1'] = torch.zeros(dimention)
-    params['W2'] = torch.randn(dimention, 1)
-    params['b2'] = torch.zeros(1)
+    #params['W1'] = torch.randn(option_size, dimention) / (dimention**0.5)
+    #params['b1'] = torch.zeros(dimention)
+    params['W1'] = torch.randn(option_size, 1)
+    params['b1'] = torch.zeros(1, 1)
+    #params['W2'] = torch.randn(dimention, 1)
+    #params['b2'] = torch.zeros(1)
 
     print("# of samples")
     print(len(input_seq))
 
     losses = []
-    for _ in epoch:
+    for e in range(epoch):
         for i in range(len(input_seq)):
-            loss, grad = two_layer_net(input_seq[i], target_seq[i], params)
-            params['W1'] -= grad['W1']*learning_rate
-            params['b1'] -= grad['b1']*learning_rate
-            params['W2'] -= grad['W2']*learning_rate
-            params['b2'] -= grad['b2']*learning_rate
+            loss, grad = one_layer_net(input_seq[i], target_seq[i], active_seq[i], params)
+            params['W1'][active_seq[i]] -= torch.t(grad['W1'])*learning_rate*decay
+            params['b1'] -= grad['b1']*learning_rate*decay
+            #params['W2'] -= grad['W2']*learning_rate
+            #params['b2'] -= grad['b2']*learning_rate
 
             losses.append(loss.item())
 
-            if (i%10000) == 0:
-                avg_loss = sum(losses) / len(losses)
-                print("%d  Loss : %f" %(i, avg_loss,))
-                losses = []
-    
+        avg_loss = sum(losses) / len(losses)
+        print("epoch : %d, Loss : %f" %(e, avg_loss,))
+        losses = []
+        decay = decay**2
     return params
 
 def main():
@@ -160,17 +176,96 @@ def main():
     print('2. make input_seq, target_seq')
     input_seq = {}
     target_seq = {}
+    active_seq = {}
     for i in range(len(data)):
-        input_seq[i] = torch.FloatTensor([data[i].get_satisNormalDist(), data[i].get_financialStatementNormalDist()])
-        target_seq[i] = torch.FloatTensor(data[i].get_creditScore)
+        input_box = []
+        active = []
+
+        if data[i].get_satisNormalDist()!=None:
+            input_box.append(data[i].get_satisNormalDist())
+            active.append(0)
+        
+        if data[i].get_rate()!=None:
+            input_box.append(data[i].get_rate())
+            active.append(1)
+
+        if data[i].get_budoRate()!=None:
+            input_box.append(data[i].get_budoRate())
+            active.append(2)
+
+        if data[i].get_isBig()!=None:
+            input_box.append(data[i].get_isBig())
+            active.append(3)
+        
+        if data[i].get_financialStatementNormalDist()!=None:
+            input_box.append(data[i].get_financialStatementNormalDist())
+            active.append(4)
+
+        if data[i].get_classification()!=None:
+            input_box.append(data[i].get_classification()//10000)
+            active.append(5)
+            input_box.append((data[i].get_classification()//1000)%10)
+            active.append(6)
+
+        input_seq[i] = torch.FloatTensor(input_box).unsqueeze(0)
+        target_seq[i] = torch.FloatTensor([data[i].get_creditScore()])
+        active_seq[i] = active
 
     print('3. training...')
-    params = trainer(input_seq, target_seq, dimention=64, learning_rate=0.025, epoch=1)
+    params = trainer(input_seq, target_seq, active_seq, dimention=64, learning_rate=0.0001, decay=0.98, epoch=10)
     
-    print('4. save data')
-    with open('output.pickle', 'w') as f:
-        f.write(params)
+    print('4. save data...')
+    with open('output.pickle', 'wb') as f:
+        pickle.dump(params, f)
     
     print('5. finish...')
 
-main()
+def test():
+    with open('output.pickle', 'rb') as f:
+        params = pickle.load(f)
+
+    with open('datalist.data', 'rb') as f:
+        data = pickle.load(f)
+
+    random.shuffle(data)
+
+    input_seq = {}
+    target_seq = {}
+    active_seq = {}
+    for i in range(10):
+        input_box = []
+        active = []
+
+        if data[i].get_satisNormalDist()!=None:
+            input_box.append(data[i].get_satisNormalDist())
+            active.append(0)
+        
+        if data[i].get_rate()!=None:
+            input_box.append(data[i].get_rate())
+            active.append(1)
+
+        if data[i].get_budoRate()!=None:
+            input_box.append(data[i].get_budoRate())
+            active.append(2)
+
+        if data[i].get_isBig()!=None:
+            input_box.append(data[i].get_isBig())
+            active.append(3)
+        
+        if data[i].get_financialStatementNormalDist()!=None:
+            input_box.append(data[i].get_financialStatementNormalDist())
+            active.append(4)
+
+        if data[i].get_classification()!=None:
+            input_box.append(data[i].get_classification()//10000)
+            active.append(5)
+            input_box.append((data[i].get_classification()//1000)%10)
+            active.append(6)
+
+        input_seq[i] = torch.FloatTensor(input_box).unsqueeze(0)
+        target_seq[i] = torch.FloatTensor([data[i].get_creditScore()])
+        active_seq[i] = active
+
+        print("real : %f, predict : %f" %(target_seq[i], one_layer_net(input_seq[i], None, active_seq[i], params)))
+
+test()
