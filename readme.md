@@ -5,4 +5,4 @@
 ![single_layer](./image/single_layer.png)
 
 2. multi_layer_perceptron -- 개발 중...
-![multi_layer](./image/multi_lay.png)
+![multi_layer](./image/multi_layer.png)
